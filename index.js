@@ -36,6 +36,7 @@ import { composeSummon, SECTION_NAME, SECTION_ORDER } from "./lib/inject.js";
 import { getAvatar, avatarUrl, AVATAR_DEFAULT_SIZE } from "./lib/avatars.js";
 import { installShims, checkShimDeps } from "./lib/shims.js";
 import { loadConnectors, connectorView } from "./lib/connectors.js";
+import { listLocal, localCount, addLocal, removeLocal } from "./lib/local-connectors.js";
 import { classify, probeMany, probeCacheStats } from "./lib/connector-probe.js";
 import {
 	connectInSession,
@@ -597,7 +598,7 @@ function toolConnectorInstall(ctx) {
 				return { error: `连接器「${id}」无法接入：${access.why}` };
 			}
 			try {
-				const result = await connectInSession({ id: c.id, name: c.name, servers: c.servers }, agent);
+				const result = await connectInSession({ id: c.id, name: c.name, servers: c.servers, mountTimeoutMs: c.mountTimeoutMs }, agent);
 				return {
 					...result,
 					access: access.level,
@@ -608,6 +609,62 @@ function toolConnectorInstall(ctx) {
 			} catch (error) {
 				return { error: `接入失败：${String(error?.message ?? error)}` };
 			}
+		},
+	};
+}
+
+function toolLocalList(ctx) {
+	return {
+		name: "wb_local_connectors_list",
+		description:
+			"列出本机自建的「本地连接器」（stdio 型 MCP server 注册表，如 npx/uvx 起的本地 MCP）。" +
+			"与在线目录分开维护；接入仍用 wb_connector_install（本地条目同样按会话挂载）。",
+		parameters: { type: "object", properties: {}, additionalProperties: false },
+		output: { schema: { type: "object", additionalProperties: true }, render: jsonRender },
+		async execute() {
+			const items = listLocal().map((c) => ({ ...connectorView(c), source: "local" }));
+			return { count: items.length, items, hint: items.length === 0 ? "本地还没有条目；用 wb_local_connectors_manage action=add 注册，或在 UI 连接器面板里添加" : undefined };
+		},
+	};
+}
+
+function toolLocalManage(ctx) {
+	return {
+		name: "wb_local_connectors_manage",
+		description:
+			"注册 / 删除本机「本地连接器」（stdio 型 MCP server，如 `npx -y <pkg>`、`uvx <pkg>`）。" +
+			"add 需要 command，可选 name/args（字符串按空格切）/env（值支持 ${VAR} 形式，接入时从环境求值，建议凭据用环境变量不落明文）。" +
+			"注册后用 wb_connectors_list 能看到（source=local），接入用 wb_connector_install。删除只移除注册，不影响已在会话里的挂载。",
+		parameters: {
+			type: "object",
+			properties: {
+				action: { type: "string", enum: ["add", "remove"], description: "add=注册新条目；remove=删除" },
+				id: { type: "string", description: "remove 必填；add 可选（默认按 name 生成 slug）" },
+				name: { type: "string", description: "add：显示名" },
+				command: { type: "string", description: "add 必填：可执行命令，如 npx" },
+				args: { type: "string", description: "add：参数（按空格切分），如 `-y doc-hub-mcp@latest`" },
+				env: { type: "object", additionalProperties: { type: "string" }, description: "add：环境变量（值支持 ${VAR} 占位）" },
+				description: { type: "string", description: "add：一句话用途" },
+			},
+			additionalProperties: false,
+		},
+		output: { schema: { type: "object", additionalProperties: true }, render: jsonRender },
+		async execute(args) {
+			if (args?.action === "remove") {
+				const id = String(args?.id ?? "").trim();
+				if (id.length === 0) return { error: "remove 需要 id（先 wb_local_connectors_list 查）" };
+				return { removed: removeLocal(id), id };
+			}
+			const r = addLocal({
+				id: args?.id,
+				name: args?.name,
+				command: args?.command,
+				args: args?.args,
+				env: args?.env,
+				description: args?.description,
+			});
+			if (!r.ok) return { error: r.error };
+			return { added: true, entry: { ...connectorView(r.entry), source: "local" } };
 		},
 	};
 }
@@ -810,7 +867,8 @@ function makeHandler(ctx, cfg) {
 					installed: [...installed.values()],
 					items: rows.slice(0, 600).map((r) => ({
 						id: r.id, name: r.name, transportKind: r.transportKind, access: r.access,
-						needsEnv: r.needsEnv, summary: r.description, needsCli: r.needsCli,
+						why: r.why, needsEnv: r.needsEnv, summary: r.description, needsCli: r.needsCli,
+						source: r.source ?? "online",
 						installed: installed.has(safeServerName(r.id)),
 						disabled: installed.get(safeServerName(r.id))?.disabled === true,
 					})),
@@ -855,11 +913,37 @@ function makeHandler(ctx, cfg) {
 				const a = classify(c);
 				if (a.level === "blocked" || a.level === "unsupported") return reply(res, 400, { ok: false, error: a.why });
 				try {
-					const r = await connectInSession({ id: c.id, name: c.name, servers: c.servers }, agent);
+					const r = await connectInSession({ id: c.id, name: c.name, servers: c.servers, mountTimeoutMs: c.mountTimeoutMs }, agent);
 					return reply(res, 200, { ok: true, ...r, access: a.level, needsEnv: a.needsEnv });
 				} catch (error) {
 					return reply(res, 502, { ok: false, error: String(error?.message ?? error) });
 				}
+			}
+
+			// 本地连接器注册表（自建 stdio MCP）：列 / 加 / 删；接入仍走 connector-install
+			if (req.method === "GET" && seg === "local-connectors") {
+				const items = listLocal().map((c) => ({ ...connectorView(c), source: "local" }));
+				return reply(res, 200, { ok: true, count: items.length, items });
+			}
+			if (req.method === "POST" && (seg === "local-connector-add" || seg === "local-connector-remove")) {
+				const body = JSON.parse((await readBody(req)) || "{}");
+				if (seg === "local-connector-remove") {
+					const id = String(body.id ?? "").trim();
+					if (id.length === 0) return reply(res, 400, { ok: false, error: "缺少 id" });
+					const removed = removeLocal(id);
+					if (!removed) return reply(res, 404, { ok: false, error: `本地没有 id「${id}」的连接器` });
+					return reply(res, 200, { ok: true, removed: true, id });
+				}
+				const r = addLocal({
+					name: body.name,
+					command: body.command,
+					args: body.args,
+					env: body.env,
+					description: body.description,
+					mountTimeoutMs: body.mountTimeoutMs,
+				});
+				if (!r.ok) return reply(res, 400, { ok: false, error: r.error });
+				return reply(res, 200, { ok: true, entry: { ...connectorView(r.entry), source: "local" } });
 			}
 
 			if (req.method === "POST" && (seg === "summon" || seg === "unsummon")) {
@@ -948,7 +1032,9 @@ export async function apply(ctx, config) {
 	// ── 模型侧工具 ──
 	const builtTools = [toolList(ctx, cfg), toolRead(ctx, cfg), toolSummon(ctx, cfg), toolUnsummon(ctx)];
 	// 连接器工具默认注册（数据面只读；写操作在 wb_connector_install 里，由用户显式触发）
-	if (cfg.connectors?.enabled !== false) builtTools.push(toolConnectors(ctx), toolConnectorInstall(ctx));
+	if (cfg.connectors?.enabled !== false) {
+		builtTools.push(toolConnectors(ctx), toolConnectorInstall(ctx), toolLocalList(ctx), toolLocalManage(ctx));
+	}
 	for (const tool of builtTools) {
 		ctx.effect(() => ctx.tools.register(tool), `dsh-workbuddy-summon: tool ${tool.name}`);
 	}
