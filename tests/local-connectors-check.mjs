@@ -97,7 +97,29 @@ const byId = new Map([...cat.connectors].map((c) => [c.id, c]));
 const rr = await CS.restoreForSession({ id: "sess-local", ctx: agent.ctx }, byId);
 ok("恢复本地条目成功", rr.restored.includes(r1.entry.id) && rr.failed.length === 0, JSON.stringify(rr));
 
-// ⑨ 删除后目录同步消失
+// ⑨ 编辑：updateLocal 改字段 / 空命令拒绝 / 不存在报错 / id 不变
+const u0 = LC.updateLocal("不存在", { command: "node" });
+ok("编辑不存在的 id 报错", u0.ok === false && /没有 id/.test(u0.error), u0.error ?? "");
+const u1 = LC.updateLocal(r2.entry.id, { command: "", name: "x" });
+ok("空命令拒绝", u1.ok === false && /command/.test(u1.error), u1.error ?? "");
+const u2 = LC.updateLocal(r2.entry.id, {
+	name: "改过名",
+	command: "node",
+	args: "a.mjs --watch",
+	env: { A: "${TOKEN_A}" },
+	description: "新描述",
+});
+ok("编辑成功", u2.ok === true, u2.error ?? "");
+ok("编辑后 id 不变", u2.entry.id === r2.entry.id, u2.entry.id);
+ok("编辑后 args 切分", JSON.stringify(u2.entry.servers[0].args) === JSON.stringify(["a.mjs", "--watch"]), JSON.stringify(u2.entry.servers[0].args));
+ok("编辑后 env 更新", u2.entry.servers[0].env.A === "${TOKEN_A}", JSON.stringify(u2.entry.servers[0].env));
+ok("编辑后 name 更新", u2.entry.name === "改过名", u2.entry.name);
+const u3 = LC.updateLocal(r2.entry.id, { description: "只改描述" });
+ok("局部更新保留其它字段", u3.ok === true && u3.entry.name === "改过名" && u3.entry.servers[0].command === "node" && u3.entry.description === "只改描述", JSON.stringify({ n: u3.entry?.name, c: u3.entry?.servers?.[0]?.command, d: u3.entry?.description }));
+const catU = await loadConnectors({ fresh: false });
+ok("编辑后目录同步", catU.byId.get(r2.entry.id)?.name === "改过名");
+
+// ⑩ 删除后目录同步消失
 ok("删除返回 true", LC.removeLocal(r1.entry.id) === true);
 ok("删不存在返回 false", LC.removeLocal(r1.entry.id) === false);
 const cat2 = await loadConnectors({ fresh: false });
