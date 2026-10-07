@@ -1,0 +1,162 @@
+#!/usr/bin/env bash
+# shim-of: dsh-workbuddy-summon
+# westock-data —— WorkBuddy 专家包的命令兼容垫片
+#
+# 【为什么需要】
+# WorkBuddy 金融类专家包（cb_teams_marketplace/finance-data、COS 上的 a-share-analysis 等）
+# 的成员 prompt 把**技能目录名当成了命令名**：写的是 `westock-data quote sh600519`。
+# 而技能自己的文档（skills/westock-data/SKILL.md、references/commands.md）通篇是
+# `westock <子命令>`，`westock-data quote` 出现 0 次；真实命令是官方 Go 二进制 `westock`。
+# 在不修改专家提示词的前提下，补一个同名命令即可兼容。
+#
+# 【为什么不能纯转发 —— 本垫片存在的真正理由】
+# 实测真实 CLI 会**静默忽略多余的位置参数**，不报错：
+#   westock kline sh600519 day 20   → 返回 100 行（默认 limit），而不是 20 行
+#   westock finance sh600519 4      → 返回默认 3 期，而不是 4 期
+# 光改名字的话，模型会拿着错数据当正确结果继续分析 —— 比直接报错危险得多。
+# 所以下面把专家惯用的位置参数形态翻译成真实 flag。
+#
+# 【翻译原则】
+#   语义确定的 → 翻译；不确定的 → 原样透传，让真实 CLI 自己报 unknown flag；
+#   官方 CLI 确实没有的能力 → 明确报错并给替代命令，绝不静默返回空数据。
+#
+# 调试：WB_SHIM_DRYRUN=1 westock-data kline sh600519 day 20   # 只打印翻译后的命令
+set -uo pipefail
+
+REAL="$(command -v westock 2>/dev/null || true)"
+if [ -z "$REAL" ]; then
+  cat >&2 <<'EOF'
+westock-data: 底层 CLI `westock` 未安装。
+官方安装脚本（自带 SHA256 信任根校验）：
+  bash ~/.workbuddy/plugins/marketplaces/cb_teams_marketplace/plugins/finance-data/skills/westock-data/scripts/setup.sh -y
+装完可 `westock upgrade` 自升级到最新通道。
+EOF
+  exit 127
+fi
+
+die() { printf 'westock-data: %s\n' "$*" >&2; exit 2; }
+is_num() { case "$1" in ''|*[!0-9]*) return 1 ;; *) return 0 ;; esac; }
+
+# 统一出口：dry-run 时只打印，便于回归测试
+run() {
+  if [ -n "${WB_SHIM_DRYRUN:-}" ]; then printf 'westock'; printf ' [%s]' "$@"; printf '\n'; exit 0; fi
+  exec "$REAL" "$@"
+}
+
+SUB="${1:-}"
+[ $# -gt 0 ] && shift
+[ -n "$SUB" ] || { "$REAL" --help; exit $?; }
+
+# ── ① 官方 CLI 里没有的名字 → 映射到有对应物的命令 ──────────────────────────
+case "$SUB" in
+  asfund|usfund|hkfund)  SUB="fund"; set -- flow "$@" ;;   # 个股资金流向（跨市场同一入口）
+  blocktrade)            SUB="fund"; set -- block "$@" ;;  # 大宗交易
+  lgt)                   SUB="connect" ;;                  # 陆股通成份股
+  newsdetail)            SUB="news"; set -- detail "$@" ;;
+  etf-nav)               SUB="etf"; set -- nav "$@" ;;
+  etf-holdings)          SUB="etf"; set -- holdings "$@" ;;
+  board|market|exdiv|watchlist|dehydrated|ncontent|reserve|\
+  etf-company|etf-financial|etf-holders)
+    die "子命令「${SUB}」在官方 westock CLI 中不存在（专家包文档笔误，非本环境缺装）。
+     常见替代：
+       board / market      → westock hot sector | westock sector ranking
+       exdiv               → westock dividend <代码>
+       etf-company/holders → westock etf overview <代码> | etf profile <代码>
+       watchlist           → 官方 CLI 无自选股能力（WorkBuddy 侧走 MCP，本机不可用）
+     完整能力：westock --help"
+    ;;
+esac
+
+FIRST="${1:-}"
+ARGS=()
+push() { ARGS+=("$1"); }
+
+# ── ② 位置参数翻译：只处理真实 CLI 会静默忽略的高危形态 ─────────────────────
+case "$SUB" in
+  kline)   # 专家形态 kline <代码> [day|week|…] [数量] [qfq|hfq]
+    if [ -n "$FIRST" ]; then
+      CODE="$FIRST"; shift
+      period=""; limit=""; fq=""
+      for a in "$@"; do
+        case "$a" in
+          day|week|month|season|year) period="$a" ;;
+          qfq|hfq)                    fq="$a" ;;
+          -*)                         push "$a" ;;
+          *)                          if [ -z "$limit" ] && is_num "$a"; then limit="$a"; else push "$a"; fi ;;
+        esac
+      done
+      [ -n "$period" ] && push --period && push "$period"
+      [ -n "$limit" ]  && push --limit  && push "$limit"
+      [ -n "$fq" ]     && push --fq     && push "$fq"
+      run kline "$CODE" ${ARGS[@]+"${ARGS[@]}"}
+    fi
+    ;;
+
+  finance) # 专家形态 finance <代码> [lrb|zcfz|xjll] [期数]
+    if [ -n "$FIRST" ]; then
+      CODE="$FIRST"; shift
+      type=""; limit=""
+      for a in "$@"; do
+        case "$a" in
+          lrb)                     type="income" ;;
+          zcfz)                    type="balance" ;;
+          xjll)                    type="cashflow" ;;
+          income|balance|cashflow) type="$a" ;;
+          -*)                      push "$a" ;;
+          *)                       if [ -z "$limit" ] && is_num "$a"; then limit="$a"; else push "$a"; fi ;;
+        esac
+      done
+      [ -n "$type" ]  && push --type  && push "$type"
+      [ -n "$limit" ] && push --limit && push "$limit"
+      run finance "$CODE" ${ARGS[@]+"${ARGS[@]}"}
+    fi
+    ;;
+
+  news)    # 专家形态 news <代码> [类型] [条数] → news list <代码> [--type N] [--limit N]
+    if [ -n "$FIRST" ] && [ "$FIRST" != "list" ] && [ "$FIRST" != "detail" ]; then
+      CODE="$FIRST"; shift
+      nums=()
+      for a in "$@"; do case "$a" in -*) push "$a" ;; *) if is_num "$a"; then nums+=("$a"); else push "$a"; fi ;; esac; done
+      n=${#nums[@]}
+      if   [ "$n" -eq 0 ]; then :
+      elif [ "$n" -eq 1 ]; then push --limit && push "${nums[0]}"
+      else                      push --type  && push "${nums[0]}" && push --limit && push "${nums[1]}"
+      fi
+      run news list "$CODE" ${ARGS[@]+"${ARGS[@]}"}
+    fi
+    ;;
+
+  hot)     # 专家形态 hot board 20 → hot sector --limit 20
+    if [ "$FIRST" = "board" ]; then
+      shift
+      for a in "$@"; do case "$a" in -*) push "$a" ;; *) if is_num "$a"; then push --limit && push "$a"; else push "$a"; fi ;; esac; done
+      run hot sector ${ARGS[@]+"${ARGS[@]}"}
+    fi
+    ;;
+
+  index)   # 专家形态 index --list --limit 50 → index list --limit 50
+    rest=(); saw=0
+    for a in "$@"; do if [ "$a" = "--list" ]; then saw=1; else rest+=("$a"); fi; done
+    if [ "$saw" = 1 ]; then
+      if [ -n "$FIRST" ] && [ "$FIRST" != "--list" ]; then
+        run index "$FIRST" list ${rest[@]+"${rest[@]}"}
+      fi
+      run index list ${rest[@]+"${rest[@]}"}
+    fi
+    ;;
+
+  marketnews) # 专家形态 marketnews hs|hk|us → 市场资讯 = 该市场大盘指数的 news list
+    case "$FIRST" in
+      hs) CODE="sh000001" ;;
+      hk) CODE="hkHSI" ;;
+      us) CODE="usDJI" ;;
+      *)  die "marketnews 需要市场参数 hs|hk|us（收到「${FIRST:-}」）" ;;
+    esac
+    shift
+    for a in "$@"; do case "$a" in -*) push "$a" ;; *) if is_num "$a"; then push --limit && push "$a"; else push "$a"; fi ;; esac; done
+    run news list "$CODE" ${ARGS[@]+"${ARGS[@]}"}
+    ;;
+esac
+
+# ──  其余命令语义一致，原样转发（真实 CLI 会明确报 unknown flag，不会静默给错数据）
+run "$SUB" ${@+"$@"}

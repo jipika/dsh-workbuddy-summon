@@ -1,0 +1,42 @@
+{
+  "name": "dsh-workbuddy-summon",
+  "icon": "./assets/icon.svg",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "把 WorkBuddy 专家团 / 专家 / 连接器做成在线目录，在对话框里「召唤」使用（按需注入，默认不干预会话）。",
+  "license": "MIT",
+  "main": "./index.js",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true
+    }
+  },
+  "meta": {
+    "title": "WorkBuddy 专家召唤",
+    "description": "在线拉取 WorkBuddy 专家团 / 专家目录，在对话框一键召唤；未召唤时完全不注入。"
+  },
+  "files": [
+    "index.js",
+    "lib/",
+    "bin/",
+    "locale/",
+    "cordis.patch.yml"
+  ],
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0"
+  },
+  "bin": {
+    "westock-data": "./bin/westock-data",
+    "westock-tool": "./bin/westock-tool"
+  }
+}

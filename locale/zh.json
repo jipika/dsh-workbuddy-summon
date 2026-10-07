@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "WorkBuddy 专家召唤",
+    "description": "在线拉取 WorkBuddy 专家团 / 专家目录，在对话框一键召唤；未召唤时完全不注入。"
+  }
+}

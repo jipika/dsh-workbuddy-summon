@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+# shim-of: dsh-workbuddy-summon
+# westock-tool —— 兼容垫片（把技能包里的 Node CLI 挂到 PATH）
+#
+# 来源：WorkBuddy 专家包 cb_teams_marketplace/plugins/finance-data/skills/westock-tool/
+# 的 package.json 里声明了 "bin": {"westock-tool": "./scripts/index.js"}，但 WorkBuddy 只在
+# 自己进程内注册技能命令，不会写进系统 PATH —— 所以 DSH 里模型按 prompt 调 `westock-tool`
+# 会 command not found。这里把它挂上，**不修改专家提示词**即可完美兼容。
+#
+# 刻意不硬编码技能包路径：市场更新会换目录/uuid，写死路径等于把版本冻在本地。
+set -uo pipefail
+
+NODE="$(command -v node 2>/dev/null || true)"
+if [ -z "$NODE" ]; then
+  echo "westock-tool: 需要 node ≥ 18，当前 PATH 里找不到 node。" >&2
+  exit 127
+fi
+
+# 在所有市场里找该技能的 CLI 入口，多个时取最新修改的那份
+CAND="$(find "$HOME/.workbuddy/plugins/marketplaces" -maxdepth 8 -type f \
+  -path "*/skills/westock-tool/scripts/index.js" -print0 2>/dev/null \
+  | xargs -0 ls -t 2>/dev/null | head -1)"
+
+if [ -z "$CAND" ] || [ ! -f "$CAND" ]; then
+  cat >&2 <<'EOF'
+westock-tool: 未找到技能包内的 CLI 入口
+  期望路径：~/.workbuddy/plugins/marketplaces/*/plugins/finance-data/skills/westock-tool/scripts/index.js
+  请先在 WorkBuddy 里安装/召唤 finance-data 相关专家，使该技能包落到本机。
+EOF
+  exit 127
+fi
+
+exec "$NODE" "$CAND" "$@"
