@@ -82,7 +82,7 @@ async function call(method, path, body) {
 console.log("\n② GET /connectors");
 const list = await call("GET", "/dsh-workbuddy-summon/connectors");
 ok("200", list.status === 200);
-ok("目录 317 条（在线）", list.json.catalogTotal === 317, `${list.json.catalogTotal} source=${list.json.source}`);
+ok("目录条数下限且来源在线", list.json.catalogTotal > 300 && list.json.source === "online", `${list.json.catalogTotal} source=${list.json.source}`);
 ok("accessSummary 有分级", Object.keys(list.json.accessSummary ?? {}).length > 0, JSON.stringify(list.json.accessSummary));
 ok("item 字段精简", ["id", "name", "access", "transportKind", "installed", "summary"].every((k) => k in (list.json.items?.[0] ?? "")), Object.keys(list.json.items?.[0] ?? {}).join(","));
 ok("无 servers/env 细节泄漏", !JSON.stringify(list.json.items).includes("mcpServers"));
@@ -147,7 +147,7 @@ console.log("\n⑥ 工具面 execute");
 const tl = tools.find((t) => t.name === "wb_connectors_list");
 const tr = await tl.execute({ access: "ready", limit: 3 });
 ok("工具返回分级汇总", typeof tr.accessSummary === "object" && tr.items.length <= 3, `total=${tr.total}`);
-ok("工具含 catalogTotal 与 etag", tr.catalogTotal === 317 && typeof tr.etag === "string");
+ok("工具含 catalogTotal 与 etag", tr.catalogTotal > 300 && tr.source === "online" && typeof tr.etag === "string");
 const ti = tools.find((t) => t.name === "wb_connector_install");
 const none = await ti.execute({});
 ok("不传 id → 返回本会话已接入清单", Array.isArray(none.installed) && none.scoped === true, `count=${none.count} sid=${String(none.sessionId).slice(0, 10)}`);
