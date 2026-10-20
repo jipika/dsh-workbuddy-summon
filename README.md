@@ -279,3 +279,18 @@ WB_SHIM_DRYRUN=1 westock-data kline sh600519 day 20   # 只看翻译，不联网
 - 连接器接入是**会话级**：换会话需重新接入；重启后由 `agent/created` 按存储意图自动重建。
 - `config.connectors.enabled: false` 可整体关掉连接器工具与 tab（默认开）。
 - 专家包的 `skills/`、`bin/` 里的可执行脚本**不会**被自动执行，只作为文本按需读取。
+
+---
+
+## ☕ 赞赏支持
+
+如果 dsh-workbuddy-summon 对你的研究与测试有所帮助，欢迎请作者喝杯咖啡 ☕
+
+<p align="center">
+  <img src="assets/sponsor.jpg" width="260" alt="微信赞赏码" />
+  <img src="assets/afdian_reward.jpg" width="200" alt="爱发电赞助码" />
+</p>
+
+<p align="center">
+  <b>给项目点个 Star ⭐</b> 同样是对开发者最大的鼓励！
+</p>
