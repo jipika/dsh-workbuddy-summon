@@ -1,7 +1,7 @@
 {
   "name": "dsh-workbuddy-summon",
   "icon": "./assets/icon.svg",
-  "version": "0.1.1",
+  "version": "0.1.3",
   "private": true,
   "type": "module",
   "description": "把 WorkBuddy 专家团 / 专家 / 连接器做成在线目录，在对话框里「召唤」使用（按需注入，默认不干预会话）。H5（≤1023px）下面板整屏显示并带关闭键。",
